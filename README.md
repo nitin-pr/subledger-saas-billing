@@ -95,6 +95,19 @@ running:
 - **http://localhost:8000/docs** (Swagger UI)
 - **http://localhost:8000/openapi.json** (raw OpenAPI schema)
 
+A Postman collection is also included: `postman/SubLedger.postman_collection.json`,
+covering all 13 endpoints plus all 9 required business rules (26 requests,
+42 assertions). Import it into Postman with `base_url = http://127.0.0.1:8000`,
+or run it with [newman](https://github.com/postmanlabs/newman):
+
+```bash
+npx newman run postman/SubLedger.postman_collection.json
+```
+
+It's fully self-contained and re-runnable — each run generates a fresh
+plan name/customer email via a `Date.now()`-based pre-request script, so
+re-running it against the same database never collides with earlier runs.
+
 ## 3. Required APIs
 
 | Method | Endpoint | Purpose |

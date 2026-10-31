@@ -1,0 +1,681 @@
+{
+  "info": {
+    "name": "SubLedger - SaaS Subscription & Billing System",
+    "description": "Covers all 13 required endpoints plus the 9 required business rules: plan price > 0, unique customer email, inactive-plan subscription rejection, duplicate active subscription rejection, invoice amount snapshot, payment-exceeds-remaining rejection, full/partial payment status transitions, failed payment not increasing amount_paid, and append-only traceable ledger entries.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "base_url", "value": "http://127.0.0.1:8000" },
+    { "key": "ts", "value": "" },
+    { "key": "plan_id", "value": "" },
+    { "key": "plan_id_to_deactivate", "value": "" },
+    { "key": "customer_id", "value": "" },
+    { "key": "customer_email", "value": "" },
+    { "key": "subscription_id", "value": "" },
+    { "key": "invoice_id", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "01 - Plans",
+      "item": [
+        {
+          "name": "Create Plan (expect 201)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  "pm.collectionVariables.set('ts', Date.now());",
+                  "pm.collectionVariables.set('customer_email', 'cust_' + Date.now() + '@example.com');"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 201', () => pm.response.to.have.status(201));",
+                  "const json = pm.response.json();",
+                  "pm.test('Plan is active with the price we sent', () => {",
+                  "    pm.expect(json.status).to.eql('active');",
+                  "    pm.expect(json.price).to.eql('100.00');",
+                  "});",
+                  "pm.collectionVariables.set('plan_id', json.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/plans", "host": ["{{base_url}}"], "path": ["plans"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Pro Monthly {{ts}}\",\n  \"description\": \"Pro tier\",\n  \"billing_cycle\": \"monthly\",\n  \"price\": \"100.00\",\n  \"currency\": \"USD\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Create Plan With Price 0 (expect 422)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 422 (Pydantic validation)', () => pm.response.to.have.status(422));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/plans", "host": ["{{base_url}}"], "path": ["plans"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Free {{ts}}\",\n  \"billing_cycle\": \"monthly\",\n  \"price\": \"0\"\n}"
+            }
+          }
+        },
+        {
+          "name": "List Plans (expect 200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Response is a non-empty array', () => {",
+                  "    pm.expect(pm.response.json()).to.be.an('array').that.is.not.empty;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/plans", "host": ["{{base_url}}"], "path": ["plans"] }
+          }
+        },
+        {
+          "name": "Create Second Plan For Deactivate Test (expect 201)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 201', () => pm.response.to.have.status(201));",
+                  "pm.collectionVariables.set('plan_id_to_deactivate', pm.response.json().id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/plans", "host": ["{{base_url}}"], "path": ["plans"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Legacy Plan {{ts}}\",\n  \"billing_cycle\": \"yearly\",\n  \"price\": \"500.00\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Deactivate Plan (expect 200 + status inactive)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Plan status is inactive', () => {",
+                  "    pm.expect(pm.response.json().status).to.eql('inactive');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": {
+              "raw": "{{base_url}}/plans/{{plan_id_to_deactivate}}",
+              "host": ["{{base_url}}"],
+              "path": ["plans", "{{plan_id_to_deactivate}}"]
+            },
+            "body": { "mode": "raw", "raw": "{\n  \"status\": \"inactive\"\n}" }
+          }
+        }
+      ]
+    },
+    {
+      "name": "02 - Customers",
+      "item": [
+        {
+          "name": "Create Customer (expect 201)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 201', () => pm.response.to.have.status(201));",
+                  "const json = pm.response.json();",
+                  "pm.test('Customer is active with the email we sent', () => {",
+                  "    pm.expect(json.status).to.eql('active');",
+                  "    pm.expect(json.email).to.eql(pm.collectionVariables.get('customer_email'));",
+                  "});",
+                  "pm.collectionVariables.set('customer_id', json.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/customers", "host": ["{{base_url}}"], "path": ["customers"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Acme Corp\",\n  \"email\": \"{{customer_email}}\",\n  \"company_name\": \"Acme Corp\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Create Customer With Duplicate Email (expect 400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 400', () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/customers", "host": ["{{base_url}}"], "path": ["customers"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Acme Corp Duplicate\",\n  \"email\": \"{{customer_email}}\"\n}"
+            }
+          }
+        },
+        {
+          "name": "List Customers (expect 200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Response is a non-empty array', () => {",
+                  "    pm.expect(pm.response.json()).to.be.an('array').that.is.not.empty;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/customers", "host": ["{{base_url}}"], "path": ["customers"] }
+          }
+        },
+        {
+          "name": "Get Customer By Id (expect 200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Returned id matches', () => {",
+                  "    pm.expect(String(pm.response.json().id)).to.eql(String(pm.collectionVariables.get('customer_id')));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/customers/{{customer_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["customers", "{{customer_id}}"]
+            }
+          }
+        },
+        {
+          "name": "Get Unknown Customer (expect 404)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 404', () => pm.response.to.have.status(404));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/customers/999999", "host": ["{{base_url}}"], "path": ["customers", "999999"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "03 - Subscriptions",
+      "item": [
+        {
+          "name": "Create Subscription (expect 201)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 201', () => pm.response.to.have.status(201));",
+                  "const json = pm.response.json();",
+                  "pm.test('Subscription is active', () => pm.expect(json.status).to.eql('active'));",
+                  "pm.collectionVariables.set('subscription_id', json.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/subscriptions", "host": ["{{base_url}}"], "path": ["subscriptions"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"customer_id\": {{customer_id}},\n  \"plan_id\": {{plan_id}}\n}"
+            }
+          }
+        },
+        {
+          "name": "Create Duplicate Active Subscription (expect 400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 400', () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/subscriptions", "host": ["{{base_url}}"], "path": ["subscriptions"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"customer_id\": {{customer_id}},\n  \"plan_id\": {{plan_id}}\n}"
+            }
+          }
+        },
+        {
+          "name": "Create Subscription For Inactive Plan (expect 400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 400', () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/subscriptions", "host": ["{{base_url}}"], "path": ["subscriptions"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"customer_id\": {{customer_id}},\n  \"plan_id\": {{plan_id_to_deactivate}}\n}"
+            }
+          }
+        },
+        {
+          "name": "List Subscriptions (expect 200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Response is a non-empty array', () => {",
+                  "    pm.expect(pm.response.json()).to.be.an('array').that.is.not.empty;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/subscriptions", "host": ["{{base_url}}"], "path": ["subscriptions"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "04 - Invoices",
+      "item": [
+        {
+          "name": "Generate Invoice (expect 201, amount_due = plan price)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 201', () => pm.response.to.have.status(201));",
+                  "const json = pm.response.json();",
+                  "pm.test('amount_due matches plan price, amount_paid is 0, status is issued', () => {",
+                  "    pm.expect(json.amount_due).to.eql('100.00');",
+                  "    pm.expect(parseFloat(json.amount_paid)).to.eql(0);",
+                  "    pm.expect(json.status).to.eql('issued');",
+                  "});",
+                  "pm.collectionVariables.set('invoice_id', json.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/invoices/generate", "host": ["{{base_url}}"], "path": ["invoices", "generate"] },
+            "body": { "mode": "raw", "raw": "{\n  \"subscription_id\": {{subscription_id}}\n}" }
+          }
+        },
+        {
+          "name": "Generate Invoice For Unknown Subscription (expect 404)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 404', () => pm.response.to.have.status(404));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/invoices/generate", "host": ["{{base_url}}"], "path": ["invoices", "generate"] },
+            "body": { "mode": "raw", "raw": "{\n  \"subscription_id\": 999999\n}" }
+          }
+        },
+        {
+          "name": "Get Invoice By Id (expect 200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Returned id matches', () => {",
+                  "    pm.expect(String(pm.response.json().id)).to.eql(String(pm.collectionVariables.get('invoice_id')));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/invoices/{{invoice_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["invoices", "{{invoice_id}}"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "05 - Payments",
+      "item": [
+        {
+          "name": "Record Partial Payment (expect 201, status partially_paid)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 201', () => pm.response.to.have.status(201));",
+                  "const json = pm.response.json();",
+                  "pm.test('Invoice is partially_paid with amount_paid 40.00', () => {",
+                  "    pm.expect(json.invoice.status).to.eql('partially_paid');",
+                  "    pm.expect(json.invoice.amount_paid).to.eql('40.00');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/payments/record", "host": ["{{base_url}}"], "path": ["payments", "record"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"invoice_id\": {{invoice_id}},\n  \"amount\": \"40.00\",\n  \"status\": \"success\",\n  \"provider_reference\": \"txn_partial_001\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Record Payment Exceeding Remaining Amount (expect 400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 400', () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/payments/record", "host": ["{{base_url}}"], "path": ["payments", "record"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"invoice_id\": {{invoice_id}},\n  \"amount\": \"999.00\",\n  \"status\": \"success\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Record Failed Payment (expect 201, amount_paid unchanged)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 201', () => pm.response.to.have.status(201));",
+                  "const json = pm.response.json();",
+                  "pm.test('amount_paid is still 40.00 and invoice status still partially_paid', () => {",
+                  "    pm.expect(json.invoice.amount_paid).to.eql('40.00');",
+                  "    pm.expect(json.invoice.status).to.eql('partially_paid');",
+                  "    pm.expect(json.payment_attempt.status).to.eql('failed');",
+                  "    pm.expect(json.payment_attempt.failure_reason).to.eql('card_declined');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/payments/record", "host": ["{{base_url}}"], "path": ["payments", "record"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"invoice_id\": {{invoice_id}},\n  \"amount\": \"20.00\",\n  \"status\": \"failed\",\n  \"failure_reason\": \"card_declined\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Record Remaining Payment (expect 201, status paid)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 201', () => pm.response.to.have.status(201));",
+                  "const json = pm.response.json();",
+                  "pm.test('Invoice is fully paid', () => {",
+                  "    pm.expect(json.invoice.status).to.eql('paid');",
+                  "    pm.expect(json.invoice.amount_paid).to.eql('100.00');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/payments/record", "host": ["{{base_url}}"], "path": ["payments", "record"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"invoice_id\": {{invoice_id}},\n  \"amount\": \"60.00\",\n  \"status\": \"success\",\n  \"provider_reference\": \"txn_final_001\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Record Payment For Unknown Invoice (expect 404)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 404', () => pm.response.to.have.status(404));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/payments/record", "host": ["{{base_url}}"], "path": ["payments", "record"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"invoice_id\": 999999,\n  \"amount\": \"10.00\",\n  \"status\": \"success\"\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "06 - Ledger",
+      "item": [
+        {
+          "name": "Get Customer Ledger (expect 200, entries traceable + append-only)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 200', () => pm.response.to.have.status(200));",
+                  "const json = pm.response.json();",
+                  "pm.test('Ledger has invoice_created, payment_success, and payment_failure entries, each traceable via reference_id', () => {",
+                  "    const types = json.map(e => e.entry_type);",
+                  "    pm.expect(types).to.include('invoice_created');",
+                  "    pm.expect(types).to.include('payment_success');",
+                  "    pm.expect(types).to.include('payment_failure');",
+                  "    json.forEach(entry => pm.expect(entry.reference_id).to.be.a('string').and.not.empty);",
+                  "});",
+                  "pm.test('Entries are in chronological order (append-only)', () => {",
+                  "    const timestamps = json.map(e => new Date(e.created_at).getTime());",
+                  "    const sorted = [...timestamps].sort((a, b) => a - b);",
+                  "    pm.expect(timestamps).to.eql(sorted);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/customers/{{customer_id}}/ledger",
+              "host": ["{{base_url}}"],
+              "path": ["customers", "{{customer_id}}", "ledger"]
+            }
+          }
+        },
+        {
+          "name": "Get Ledger For Unknown Customer (expect 404)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 404', () => pm.response.to.have.status(404));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/customers/999999/ledger",
+              "host": ["{{base_url}}"],
+              "path": ["customers", "999999", "ledger"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "07 - Cancel Subscription",
+      "item": [
+        {
+          "name": "Cancel Subscription (expect 200, status cancelled)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 200', () => pm.response.to.have.status(200));",
+                  "const json = pm.response.json();",
+                  "pm.test('Subscription is cancelled with a cancelled_at timestamp', () => {",
+                  "    pm.expect(json.status).to.eql('cancelled');",
+                  "    pm.expect(json.cancelled_at).to.not.be.null;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "url": {
+              "raw": "{{base_url}}/subscriptions/{{subscription_id}}/cancel",
+              "host": ["{{base_url}}"],
+              "path": ["subscriptions", "{{subscription_id}}", "cancel"]
+            }
+          }
+        },
+        {
+          "name": "Resubscribe To Same Plan After Cancellation (expect 201)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 201 (duplicate-active check only blocks ACTIVE subscriptions)', () => pm.response.to.have.status(201));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/subscriptions", "host": ["{{base_url}}"], "path": ["subscriptions"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"customer_id\": {{customer_id}},\n  \"plan_id\": {{plan_id}}\n}"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}
